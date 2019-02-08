@@ -61,7 +61,7 @@ assertStringEqual() {
 # @param expected string
 assertStringNotEqual() {
     assertCount=$((assertCount+1))
-    if [ "$1" == "$2" ]; then
+    if [ "$1" = "$2" ]; then
         echo "assertStringNotEqual($assertCount): actual: \x22$1\x22 expected: \x22$2\x22" 1>&2
         assertFail=$((assertFail+1))
         return 1
