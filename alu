@@ -1,0 +1,572 @@
+#!/bin/sh
+##
+# This script implements the arithmetic logic unit (ALU)
+# for word-oriented arithmetic and logic operations
+
+# directory of this script
+dir="$(dirname $0)"
+
+# include word definitions
+source "$dir/worddefs"
+
+##
+# calls 'word' command on same path as this script
+word() { echo $($dir/word $*); }
+
+##
+# Output usage message to standard error
+usage() {
+    echo "usage: $(basename $0) [op word ...]" 1>&2
+    echo "word is a ${wordsize}-bit word, or a unsigned hex (0x1A2F) or decimal number" 1>&2
+}
+
+##
+# Returns 1 if word is < 0, else 0
+testlt() {
+    local result=0
+    
+    local sign=$(( $(word $1 $wordtopbit) ))
+    if [ $sign -eq 1 ]; then
+        result=1
+    fi
+
+    echo $result
+}
+
+##
+# Returns 1 if word is >= 0, else 0
+testge() {
+    local result=0    
+    
+    local sign=$(( $(word $1 $wordtopbit) ))
+    if [ $sign -eq 0 ]; then
+       result=1
+    fi
+
+    echo $result
+}
+
+##
+# Returns 1 if word is == 0, else 0
+testeq() {
+    local result=1        
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $b) ))
+        if [ $t -eq 1 ]; then
+          result=0
+        fi
+    done
+    echo $result
+}
+
+##
+# Arithmetic shift word by count. Same as multiplying or
+# dividing by power of 2.  Shifts bits in word left (+) or
+# right (-) by the specified count. Fills in with 0 from
+# the right, and the sign bit from the left.
+# 
+# Examples:
+#  	ash(1010 1011 1111 1111, 5)  -> 1111 1111 1110 0000
+#  	ash(1111 1111 0000 0000, -5) -> 1111 1111 1111 1110
+# 
+# @param op the operand
+# @param count the shift count
+ash() {
+   local count=$2
+   count=${count#-}
+   if [ $count -ge $wordsize ]; then
+     count=$(( $wordsize - 1 ))
+   fi
+
+   local result=$zeroword
+   local sign=$(( $(word $1 $wordtopbit) ))
+
+   if [ $2 -lt 0 ]; then
+     # move upper bits of word right.
+     for ((b=$count; b <= $(( $wordtopbit - 1)); b++)); do
+        local t=$(( $(word $1 $b) ))
+        result=$(word $result $(( $b - $count )) $t) 
+      done
+
+      # clear upper bits of word to sign bit.
+      for ((b=$(( $wordtopbit - $count )); b <= $(( $wordtopbit - 1)); b++)); do
+        result=$(word $result $b $sign)
+      done
+   else
+      # move lower bits of word left.
+      for ((b=$wordtopbit; b >= $count; b--)); do
+        local t=$(( $(word $1 $(($b - $count))) ))
+        result=$(word $result $b $t) 
+      done
+
+      # clear lower bits of word.
+      for ((b=$(($count - 1)); b >= 0; b--)); do
+        result=$(word $result $b 0)
+      done
+   fi
+   result=$(word $result $wordtopbit $sign) 
+
+   echo $result
+}
+
+##
+# Circular shift word by count. Shifts bits in word
+# left (+) or right (-) by the specified count. Bits
+# shifted off either end of word are rotated in to
+# the other end of word.
+# 
+# Examples:
+#   csh(1010 1011 1111 1111, 4)  -> 1011 1111 1111 1010
+#  	csh(1010 1011 1111 1111, -4) -> 1111 1010 1011 1111
+# 
+# @param op the operand
+# @param count the shift count
+csh() {
+   local count=$2
+   count=${count#-}
+   count=$(( $count % $wordsize ))
+
+   local result=$zeroword
+   if [ $2 -lt 0 ]; then
+     # move upper bits of word right.
+     for ((b=$count; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $b) ))
+        result=$(word $result $(( $b - $count )) $t) 
+      done
+
+      # move lower bits of word left.
+      local n=0
+      for ((b=$(( $wordtopbit - $count + 1 )); b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $n) ))
+        result=$(word $result $b $t)
+        n=$(( ++n ))
+      done
+   else
+      # move lower bits of word left.
+      for ((b=$wordtopbit; b >= $count; b--)); do
+        local t=$(( $(word $1 $(( $b - $count ))) ))
+        result=$(word $result $b $t) 
+      done
+
+      # move upper bits of word right.
+      local n=0
+      for ((b=$(( $count - 1 )); b >= 0; b--)); do
+        local t=$(( $(word $1 $(( $wordtopbit - $n ))) ))
+        result=$(word $result $b $t)
+        n=$(( ++n ))
+      done
+   fi
+
+   echo $result
+}
+
+##
+#  Logical shift word by count. Shifts bits in word
+#  left (+) or right (-) by the specified count. Shifts
+#  bits off end and fills in with 0 in either direction.
+# 
+#  Examples:
+#  	lsh(1111 1111 1111 1111, 5)  -> 1111 1111 1110 0000
+#  	lsh(1111 1111 1111 1111, -5) -> 0000 0111 1111 1111
+# 
+#  @param op the operand
+#  @param count the shift count
+lsh() {
+   local count=$2
+   if [ $count -lt 0 ]; then
+     count=$(( 0 - $count ))
+   fi
+   count=$(( $count % $wordsize ))
+
+   local result=$zeroword
+   if [ $2 -lt 0 ]; then
+     # move upper bits of word right.
+     for ((b=0; b <= $(( $wordtopbit - $count )); b++)); do
+       local t=$(( $(word $1 $(( $b + $count ))) ))
+        result=$(word $result $b $t) 
+      done
+
+      # fill left with 0 bits.
+      for ((b=$wordtopbit; b > $(( $wordtopbit - $count )); b--)); do
+        result=$(word $result $b 0) 
+      done
+   else
+      # move lower bits of word left.
+      for ((b=$wordtopbit; b >= $count; b--)); do
+        local t=$(( $(word $1 $(( $b - $count ))) ))
+        result=$(word $result $b $t) 
+      done
+
+      # fill left with 0 bits.
+      for ((b=$(( $count - 1 )); b >= 0; b--)); do
+        result=$(word $result $b 0) 
+      done
+   fi
+
+   echo $result
+}
+
+##
+# Mask all but lower (+) or upper (-) count bits
+# of word operand.
+# 
+# Examples:
+#   mask(1010 1011 1111 1111, 5)  -> 0000 0000 0001 1111
+#  	mask(1010 1011 1111 1111, -5) -> 1010 1000 0000 0000
+# 
+# @param op the operand
+# @param count the mask count
+mask() {
+   local count=$2
+   count=${count#-} 
+   if [ $count -ge $wordsize ]; then
+     count=$wordsize
+   fi
+
+   local result=$zeroword
+   if [ $2 -lt 0 ]; then
+	 	  # copy lower bits of word.
+      for ((b=0; b < $count; b++)); do
+        local t=$(( $(word $1 $b) ))
+        result=$(word $result $b $t) 
+      done
+
+      # clear upper bits of word.
+      for ((b=$count; b <= $wordtopbit; b++)); do
+        result=$(word $result $b 0) 
+      done
+   else
+      # copy upper bits of word.
+      for ((b=$count; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $b) ))
+        result=$(word $result $b $t) 
+      done
+
+      # clear lower bits of word.
+      for ((b=0; b < $count; b++)); do
+        result=$(word $result $b 0) 
+      done
+   fi
+
+   echo $result
+}
+
+##
+# Logical AND of two word operands.
+#
+# Examples:
+#   and(1111 0000 0110 1001, 1111 1111 0000 0000) -> 1111 0000 0000 0000
+
+# @param op1 the first operand
+# @param op2 the second operand
+and() {
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t1=$(( $(word $1 $b) ))
+        local t2=$(( $(word $2 $b) ))
+        local t=$(( t1 & t2 ))
+        result=$(word $result $b $t) 
+    done
+    echo $result
+}
+
+##
+# Logical OR of two word operands.
+#
+# Examples:
+#   and(1111 0000 0110 1001, 0000 1111 0000 0000) -> 1111 1111 0110 1001
+#
+# @param op1 the first operand
+# @param op2 the second operand
+or() {
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t1=$(( $(word $1 $b) ))
+        local t2=$(( $(word $2 $b) ))
+        local t=$(( t1 | t2 ))
+        result=$(word $result $b $t) 
+    done
+    echo $result
+}
+
+##
+# Logical XOR of two word operands.
+#
+# Examples:
+#   and(1111 0000 0110 1001, 1111 1111 1111 1111) -> 0000 1111 1001 0110
+#
+# @param op1 the first operand
+# @param op2 the second operand
+xor() {
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t1=$(( $(word $1 $b) ))
+        local t2=$(( $(word $2 $b) ))
+        local t=$(( t1 ^ t2 ))
+        result=$(word $result $b $t) 
+    done
+    echo $result
+}
+
+##
+# Logical NOT of word operand.
+#
+# Examples:
+# 	not(0011 0000 0000 0000) -> 1100 1111 1111 1111
+#
+# @param op the operand
+not() {
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(notBit $(word $1 $b)) ))
+        result=$(word $result $b $t) 
+    done
+    echo $result
+}
+
+##
+# Negative of word operand.
+#
+# Examples:
+# 	negative(0011 0000 0000 0000) -> 1101 1111 1111 1111
+# 	negative(1111 1111 1111 1111) -> 0001 0000 0000 0000
+#
+# @param op the operand
+minus() {
+    local carry=1
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(notBit $(word $1 $b)) + carry ))
+        carry=$((t>>1)) # bit 1 is carry bit
+        result=$(word $result $b $t) # word uses only lower bit of t
+    done
+    echo $result
+}
+
+##
+# Sum of two word operands.
+#
+# @param op1 the first operand
+# @param op2 the second operand
+add() {
+    local carry=0
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $b) + $(word $2 $b) + carry))
+        carry=$((t>>1)) # bit 1 is carry bit
+        result=$(word $result $b $t) 
+    done
+    echo $result
+}
+
+##
+# Difference of two word operands.
+# @param the first opearand
+# @param the second operand
+# @return the difference
+sub() {
+    local carry=1
+    local result=$zeroword
+    for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $1 $b) + $(notBit $(word $2 $b)) + carry))
+        carry=$((t>>1)) # bit 1 is carry bit
+        result=$(word $result $b $t) # word uses only lower bit of t
+    done
+    echo $result
+}
+
+##
+# Product of two word operands.
+#
+# @param op1 the first operand
+# @param op2 the second operand
+mul() {
+   local result=$zeroword
+
+   if [ $(( $(testeq $1) )) -eq 1 ] || [ $(( $(testeq $2) )) -eq 1 ]; then
+      result=$zeroword 
+   else
+      local w1=$1
+      local w2=$2
+      local resultNegative=0
+
+      # operands must be positive.
+      if [ $(( $(testlt $1) )) -eq 1 ]; then
+        w1=$(word $(minus $1) )
+        resultNegative=$(( !$resultNegative ))
+      fi
+
+      if [ $(( $(testlt $2) )) -eq 1 ]; then
+        w2=$(word $(minus $2) )
+        resultNegative=$(( !$resultNegative ))
+      fi
+
+      for ((b=0; b <= $wordtopbit; b++)); do
+        local t=$(( $(word $w2 $b) ))
+        if [ $t -eq 1 ]; then
+          result=$(word $(add $result $w1) )
+        fi
+
+        w1=$(word $(lsh $w1 1) )
+      done
+
+      if [ $resultNegative -eq 1 ]; then
+        result=$(word $(minus $result) )
+      fi
+   fi
+
+    echo $(word $result)
+}
+
+##
+# Quotient of two word operands.
+# The sign of the quotient is positive if the signs of
+# the operands match, and negative if they do not.
+#
+# @param op1 the first operand
+# @param op2 the second operand
+# @return the result
+div2() {
+   local result=$zeroword
+   local remainder=$zeroword
+
+   if [ $(( $(testeq $2) )) -eq 1 ]; then
+      if [ $(( $(testge $1) )) -eq 1 ]; then
+        result=$maxword
+      else
+        result=$minword
+      fi 
+   else
+      local w1=$1
+      local w2=$2
+      local resultNegative=0
+
+      # operands must be positive.
+      if [ $(( $(testlt $1) )) -eq 1 ]; then
+        w1=$(word $(minus $1) )
+        resultNegative=$(( !$resultNegative ))
+      fi
+      if [ $(( $(testlt $2) )) -eq 1 ]; then
+        w2=$(word $(minus $2) )
+        resultNegative=$(( !$resultNegative ))
+      fi
+
+      for ((b=$wordtopbit; b >= 0; b--)); do
+        result=$(word $(lsh $result 1) )
+        remainder=$(word $(lsh $remainder 1) )
+
+        local t=$(( $(word $w1 $b) ))
+        remainder=$(word $remainder 0 $t)
+        
+        local test=$zeroword
+        test=$(word $(sub $remainder $w2) )
+        if [ $(( $(testge $test) )) -eq 1 ]; then
+          result=$(word $result 0 1)
+          remainder=$test
+        fi
+      done
+
+      if [ $resultNegative -eq 1 ]; then
+        result=$(word $(minus $result) )
+      fi
+
+      if [ $resultNegative -eq 1 ]; then
+        result=$(word $(minus $remainder) )
+      fi
+   fi
+
+   echo $(word $result)
+   echo $(word $remainder)
+}
+
+
+##
+# Quotient of two word operands.
+# The sign of the quotient is positive if the signs of
+# the operands match, and negative if they do not.
+#
+# @param op1 the first operand
+# @param op2 the second operand
+# @return the result
+div() {
+   local result=$(div2 $1 $2)
+   #echo $result
+
+   local array=($result)
+   echo ${array[0]}
+}
+
+##
+# Remainder of two word operands.
+# The sign of the remainder matches the sign of the dividend.
+#
+# @param remainder the remainder
+# @param op1 the first operand
+# @param op2 the second operand
+# @return the remainder
+rmdr() {
+   local result=$(div2 $1 $2)
+   #echo $result
+
+   local array=($result)
+   echo ${array[1]}   
+}
+
+# dispatch message to alu function
+case $1 in
+testlt) 
+    echo $(testlt $2)
+    ;;
+testge) 
+    echo $(testge $2)
+    ;;
+testeq) 
+    echo $(testeq $2)
+    ;;
+ash) 
+    echo $(ash $2 $3)
+    ;;
+csh) 
+    echo $(csh $2 $3)
+    ;;
+lsh) 
+    echo $(lsh $2 $3)
+    ;;
+mask) 
+    echo $(mask $2 $3)
+    ;;
+and) 
+    echo $(and $2 $3)
+    ;;
+or) 
+    echo $(or $2 $3)
+    ;;
+xor) 
+    echo $(xor $2 $3)
+    ;;
+not) 
+    echo $(not $2)
+    ;;
+minus) 
+    echo $(minus $2)
+    ;;
+add) 
+    echo $(add $2 $3)
+    ;;
+sub) 
+    echo $(sub $2 $3)
+    ;;
+mul) 
+    echo $(mul $2 $3)
+    ;;
+div) 
+    echo $(div $2 $3)
+    ;;
+rmdr) 
+    echo $(rmdr $2 $3)
+    ;;
+*)
+    usage
+    ;;
+esac
+
